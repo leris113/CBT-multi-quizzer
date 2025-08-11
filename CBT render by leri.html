@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Offline CBT App</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 0; background: #f2f2f2; }
+  header { background: #004080; color: white; padding: 10px; text-align: center; }
+  #importSection, #startSection, #quizSection, #resultSection {
+    max-width: 900px; margin: 20px auto; background: white; padding: 20px;
+    border-radius: 8px;
+  }
+  textarea { width: 100%; height: 150px; }
+  button { padding: 10px 20px; margin: 5px; border: none; border-radius: 5px;
+    cursor: pointer; background: #004080; color: white; }
+  button:hover { opacity: 0.9; }
+  .option { padding: 8px; border: 1px solid #ccc; border-radius: 5px;
+    margin: 5px 0; cursor: pointer; }
+  .option.selected { background: #cce5ff; border-color: #004080; }
+  .option.correct { background: #d4edda; border-color: #28a745; }
+  .option.incorrect { background: #f8d7da; border-color: #dc3545; }
+  .timer { font-weight: bold; font-size: 1.2em; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<header><h1>Offline CBT App</h1></header>
+
+<section id="importSection">
+  <h2>Import Questions</h2>
+  <input type="text" id="courseName" placeholder="Course name" />
+  <textarea id="mcqText" placeholder="Paste MCQs here. Use * before correct option."></textarea>
+  <button onclick="importQuestions()">Import</button>
+  <div id="courseList"></div>
+</section>
+
+<section id="startSection" style="display:none;">
+  <h2 id="selectedCourse"></h2>
+  <label>Number of Questions (5–50):</label>
+  <input type="number" id="questionCount" min="5" max="50" value="5">
+  <button onclick="beginQuiz()">Start Quiz</button>
+</section>
+
+<section id="quizSection" style="display:none;">
+  <div class="timer" id="timer"></div>
+  <form id="quizForm"></form>
+  <button onclick="submitQuiz()">Submit</button>
+</section>
+
+<section id="resultSection" style="display:none;">
+  <h2>Results</h2>
+  <div id="scoreSummary"></div>
+  <button onclick="backToCourses()">Back to Courses</button>
+</section>
+
+<script>
+let db = {};
+let currentCourse = '';
+let questions = [];
+let timerInterval;
+let timeRemaining = 0;
+let selectedCount = 0;
+
+function importQuestions(){
+  let course = document.getElementById('courseName').value.trim();
+  let text = document.getElementById('mcqText').value.trim();
+  if(!course || !text) return alert('Enter course name and questions');
+  let parsed = parseMCQs(text);
+  db[course] = (db[course]||[]).concat(parsed);
+  localStorage.setItem('cbtData', JSON.stringify(db));
+  alert('Questions imported for '+course);
+  document.getElementById('courseName').value='';
+  document.getElementById('mcqText').value='';
+  renderCourseList();
+}
+
+function parseMCQs(text){
+  let blocks = text.split(/\n\s*\n/);
+  let result = [];
+  for(let block of blocks){
+    let lines = block.trim().split('\n');
+    let q = lines[0];
+    let opts = [];
+    let correct = null;
+    for(let i=1;i<lines.length;i++){
+      let line = lines[i].trim();
+      if(line.startsWith('*')){
+        correct = i-1;
+        line = line.slice(1).trim();
+      }
+      opts.push(line);
+    }
+    if(q && opts.length) result.push({q, opts, correct});
+  }
+  return result;
+}
+
+function renderCourseList(){
+  let html = '<h3>Available Courses</h3>';
+  for(let c in db){
+    html += `<button onclick="selectCourse('${c}')">Start ${c}</button>`;
+  }
+  document.getElementById('courseList').innerHTML = html;
+}
+
+function selectCourse(course){
+  currentCourse = course;
+  document.getElementById('selectedCourse').innerText = `Selected Course: ${course}`;
+  document.getElementById('importSection').style.display='none';
+  document.getElementById('startSection').style.display='block';
+  let total = db[course].length;
+  let qCountInput = document.getElementById('questionCount');
+  qCountInput.max = Math.min(50, total);
+  qCountInput.value = Math.min(5, total);
+}
+
+function beginQuiz(){
+  selectedCount = parseInt(document.getElementById('questionCount').value);
+  if(selectedCount < 5) selectedCount = 5;
+  if(selectedCount > 50) selectedCount = 50;
+  let pool = shuffle([...db[currentCourse]]);
+  questions = pool.slice(0, selectedCount).map(q=>{
+    return { q: q.q, opts: shuffle([...q.opts]), correct: q.opts[q.correct] };
+  });
+  timeRemaining = selectedCount * 60;
+  document.getElementById('startSection').style.display='none';
+  document.getElementById('quizSection').style.display='block';
+  renderQuiz();
+  startTimer();
+}
+
+function renderQuiz(){
+  let form = document.getElementById('quizForm');
+  form.innerHTML='';
+  questions.forEach((qObj, index)=>{
+    let block = document.createElement('div');
+    block.innerHTML = `<h3>${index+1}. ${qObj.q}</h3>`;
+    qObj.opts.forEach(opt=>{
+      let id = `q${index}_${opt}`;
+      block.innerHTML += `<div class="option">
+        <label><input type="radio" name="q${index}" value="${opt}"> ${opt}</label>
+      </div>`;
+    });
+    form.appendChild(block);
+    form.appendChild(document.createElement('hr'));
+  });
+}
+
+function startTimer(){
+  updateTimerDisplay();
+  timerInterval = setInterval(()=>{
+    timeRemaining--;
+    updateTimerDisplay();
+    if(timeRemaining <= 0){
+      clearInterval(timerInterval);
+      submitQuiz();
+    }
+  },1000);
+}
+
+function updateTimerDisplay(){
+  let mins = Math.floor(timeRemaining/60);
+  let secs = timeRemaining % 60;
+  document.getElementById('timer').innerText = `Time Left: ${mins}:${secs.toString().padStart(2,'0')}`;
+}
+
+function submitQuiz(){
+  clearInterval(timerInterval);
+  let form = document.getElementById('quizForm');
+  let data = new FormData(form);
+  let score = 0;
+  questions.forEach((qObj, index)=>{
+    let selected = data.get(`q${index}`);
+    let correct = qObj.correct;
+    let divs = form.querySelectorAll(`input[name="q${index}"]`);
+    divs.forEach(input=>{
+      let parent = input.closest('.option');
+      if(input.value === correct){
+        parent.classList.add('correct');
+      }
+      if(selected === input.value && selected !== correct){
+        parent.classList.add('incorrect');
+      }
+    });
+    if(selected === correct) score++;
+  });
+  document.getElementById('quizSection').style.display='none';
+  document.getElementById('resultSection').style.display='block';
+  let percent = ((score/selectedCount)*100).toFixed(2);
+  document.getElementById('scoreSummary').innerHTML = `
+    <p>Score: ${score} / ${selectedCount} (${percent}%)</p>
+  `;
+}
+
+function backToCourses(){
+  document.getElementById('resultSection').style.display='none';
+  document.getElementById('importSection').style.display='block';
+  renderCourseList();
+}
+
+function shuffle(arr){
+  for(let i=arr.length-1;i>0;i--){
+    let j=Math.floor(Math.random()*(i+1));
+    [arr[i],arr[j]]=[arr[j],arr[i]];
+  }
+  return arr;
+}
+
+window.onload = function(){
+  let saved = localStorage.getItem('cbtData');
+  if(saved) db = JSON.parse(saved);
+  renderCourseList();
+};
+</script>
+</body>
+</html>
